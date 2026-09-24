@@ -50,6 +50,8 @@ const DEFAULTS = {
   titleRatio: 0.072, badgeRatio: 0.028, bulletRatio: 0.033, ctaRatio: 0.033,
   gapRatio: 0.024, lineHeight: 1.16,
   minScale: 0.50,           // 文案超宽/超行时允许缩到的最小比例
+  warningBandRatio: 0.20,   // 底部警示条高度占比（开箱图用）
+  warningRatio: 0.030,       // 警示文字号参考
 };
 
 function wrapWords(ctx, text, maxWidth) {
@@ -127,7 +129,20 @@ function measure(ctx, spec, g, scale) {
     maxW = Math.max(maxW, ctaW);
     h += Math.round(gap * 0.5) + ctaH;
   }
-  return { blockH: h, maxW, titleFont, titleLines, bullets, ctaW, ctaH, ctaFs, gap, textW, truncated };
+  /* 底部警示条（开箱图专用）：品牌色横条 + 白字，横条宽度整幅、高度固定占比 */
+  let warnLines = [], warnFs = 0, bandH = 0;
+  if (spec.warning) {
+    bandH = Math.round(H * st.warningBandRatio);
+    warnFs = Math.max(12, Math.round(bandH * 0.28));
+    ctx.font = fontOf('bold', warnFs);
+    const all = wrapWords(ctx, String(spec.warning), g.W - g.pad * 2 - warnFs);
+    warnLines = all.slice(0, 3);
+    if (all.length > 3) {
+      warnLines[warnLines.length - 1] = warnLines[warnLines.length - 1].replace(/[\s,;:.]+$/, '') + '…';
+      truncated.push('warning');
+    }
+  }
+  return { blockH: h, maxW, titleFont, titleLines, bullets, ctaW, ctaH, ctaFs, gap, textW, truncated, warnLines, warnFs, bandH };
 }
 
 function draw(ctx, spec, g, m) {
@@ -168,6 +183,20 @@ function draw(ctx, spec, g, m) {
     ctx.fillStyle = '#FFFFFF'; ctx.textBaseline = 'middle';
     ctx.fillText(spec.cta, x0 + padX, y + m.ctaH / 2 + 1);
   }
+  /* 底部警示条：品牌色底 + 白字居中。警示语同样是"画上去"的，绝不由 AI 生成 */
+  if (m.bandH && m.warnLines.length) {
+    const by = g.H - m.bandH;
+    ctx.save();
+    ctx.globalAlpha = 0.94; ctx.fillStyle = g.primary;
+    ctx.fillRect(0, by, g.W, m.bandH);
+    ctx.restore();
+    ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = fontOf('bold', m.warnFs);
+    const lh = Math.round(m.warnFs * 1.32);
+    let ty = by + (m.bandH - m.warnLines.length * lh) / 2 + lh / 2;
+    for (const ln of m.warnLines) { ctx.fillText(ln, g.W / 2, ty); ty += lh; }
+    ctx.textAlign = 'left';
+  }
 }
 
 /**
@@ -207,7 +236,7 @@ async function renderDetail({ base, spec }) {
     }
   }
   /* 文案块在画布内垂直居中；高于可用高度则从顶部排起 */
-  const avail = H - pad * 2;
+  const avail = H - pad * 2 - (m.bandH || 0);   // 底部留出警示条的位置，文案不与它重叠
   g.y0 = m.blockH >= avail ? pad : Math.round((H - m.blockH) / 2);
 
   if (st.scrim) {
@@ -224,7 +253,7 @@ async function renderDetail({ base, spec }) {
   draw(ctx, spec, g, m);
   return {
     buffer: cv.toBuffer('image/png'),
-    layout: { panel: g.panel, reserveW, pad, textMaxW: Math.round(m.maxW), scale: Number(g.scale.toFixed(3)), blockH: Math.round(m.blockH), truncated: m.truncated, canvas: W + 'x' + H },
+    layout: { panel: g.panel, reserveW, pad, textMaxW: Math.round(m.maxW), scale: Number(g.scale.toFixed(3)), blockH: Math.round(m.blockH), truncated: m.truncated, warning: m.bandH ? { lines: m.warnLines.length, bandRatio: st.warningBandRatio, truncated: m.truncated.indexOf('warning') >= 0 } : null, canvas: W + 'x' + H },
   };
 }
 
