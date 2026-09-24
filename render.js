@@ -49,7 +49,7 @@ const DEFAULTS = {
   scrim: true,              // 保留区内的渐隐色板（不越界到产品上）
   titleRatio: 0.072, badgeRatio: 0.028, bulletRatio: 0.033, ctaRatio: 0.033,
   gapRatio: 0.024, lineHeight: 1.16,
-  minScale: 0.62,           // 文案超宽时允许缩到的最小比例
+  minScale: 0.50,           // 文案超宽/超行时允许缩到的最小比例
 };
 
 function wrapWords(ctx, text, maxWidth) {
@@ -73,13 +73,16 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-/* 测量：返回 {blockH, maxW}；scale 用于超宽时整组缩放 */
+/* 测量：返回 {blockH, maxW, truncated[]}；scale 用于超宽/超行时整组缩放 */
 function measure(ctx, spec, g, scale) {
   const H = g.H, st = g.st;
   const sz = (r) => Math.max(10, Math.round(H * r * scale));
   const gap = Math.round(H * st.gapRatio * scale);
   const textW = g.reserveW - g.pad * 2;
+  const maxLinesTitle = st.maxLinesTitle || 4;
+  const maxLinesBullet = st.maxLinesBullet || 3;
   let h = 0, maxW = 0;
+  const truncated = [];
 
   if (spec.badge) {
     const fs = sz(st.badgeRatio);
@@ -91,7 +94,13 @@ function measure(ctx, spec, g, scale) {
   let titleLines = [];
   if (spec.title) {
     ctx.font = fontOf('bold', titleFont);
-    titleLines = wrapWords(ctx, spec.title, textW).slice(0, 3);
+    const all = wrapWords(ctx, spec.title, textW);
+    titleLines = all.slice(0, maxLinesTitle);
+    if (all.length > maxLinesTitle) {
+      const last = titleLines[titleLines.length - 1] || '';
+      titleLines[titleLines.length - 1] = last.replace(/[\s,;:.]+$/, '') + '…';
+      truncated.push('title');
+    }
     titleLines.forEach((l) => { maxW = Math.max(maxW, ctx.measureText(l).width); });
     h += titleLines.length * lh + Math.round(gap * 0.4);
   }
@@ -102,7 +111,9 @@ function measure(ctx, spec, g, scale) {
     const fs = sz(st.bulletRatio), r = Math.round(fs * 0.26);
     const tx = r * 2 + Math.round(fs * 0.55);
     ctx.font = fontOf('bold', fs);
-    const lines = wrapWords(ctx, label.toUpperCase(), textW - tx).slice(0, 2);
+    const all = wrapWords(ctx, label.toUpperCase(), textW - tx);
+    const lines = all.slice(0, maxLinesBullet);
+    if (all.length > maxLinesBullet) truncated.push('bullet:' + label.slice(0, 20));
     lines.forEach((l) => { maxW = Math.max(maxW, ctx.measureText(l).width + tx); });
     bullets.push({ label, lines, fs, r, tx });
     h += lines.length * Math.round(fs * 1.2) + Math.round(fs * 0.55);
@@ -116,7 +127,7 @@ function measure(ctx, spec, g, scale) {
     maxW = Math.max(maxW, ctaW);
     h += Math.round(gap * 0.5) + ctaH;
   }
-  return { blockH: h, maxW, titleFont, titleLines, bullets, ctaW, ctaH, ctaFs, gap, textW };
+  return { blockH: h, maxW, titleFont, titleLines, bullets, ctaW, ctaH, ctaFs, gap, textW, truncated };
 }
 
 function draw(ctx, spec, g, m) {
@@ -184,11 +195,16 @@ async function renderDetail({ base, spec }) {
   const ctx = cv.getContext('2d');
   ctx.drawImage(image, 0, 0);
 
-  /* 先按 1.0 量；文案超宽就整组缩小（确定性地，不拆词） */
+  /* 自动适配：缩放到「不超宽 且 不截断」为止（确定性地，既不拆词、也不悄悄吃掉半句话） */
   let m = measure(ctx, spec, g, 1);
-  if (m.maxW > m.textW && m.maxW > 0) {
-    g.scale = Math.max(st.minScale, Math.min(1, m.textW / m.maxW));
+  if ((m.maxW > m.textW && m.maxW > 0) || m.truncated.length > 0) {
+    const byWidth = (m.maxW > m.textW && m.maxW > 0) ? m.textW / m.maxW : 1;
+    g.scale = Math.max(st.minScale, Math.min(1, byWidth));
     m = measure(ctx, spec, g, g.scale);
+    for (let k = 0; k < 12 && ((m.maxW > m.textW) || m.truncated.length > 0) && g.scale > st.minScale; k++) {
+      g.scale = Math.max(st.minScale, Number((g.scale - 0.04).toFixed(3)));
+      m = measure(ctx, spec, g, g.scale);
+    }
   }
   /* 文案块在画布内垂直居中；高于可用高度则从顶部排起 */
   const avail = H - pad * 2;
@@ -208,7 +224,7 @@ async function renderDetail({ base, spec }) {
   draw(ctx, spec, g, m);
   return {
     buffer: cv.toBuffer('image/png'),
-    layout: { panel: g.panel, reserveW, pad, textMaxW: Math.round(m.maxW), scale: Number(g.scale.toFixed(3)), blockH: Math.round(m.blockH), canvas: W + 'x' + H },
+    layout: { panel: g.panel, reserveW, pad, textMaxW: Math.round(m.maxW), scale: Number(g.scale.toFixed(3)), blockH: Math.round(m.blockH), truncated: m.truncated, canvas: W + 'x' + H },
   };
 }
 
