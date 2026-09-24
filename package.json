@@ -1,0 +1,13 @@
+{
+  "name": "detail-render",
+  "version": "1.0.0",
+  "description": "A+ Detail deterministic text overlay service for picture-vision-factory (项目29)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "sample": "node render.js --base _samples/mock_wide.png --spec spec_coastal.json --out _samples/final_wide.png"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.80"
+  }
+}
